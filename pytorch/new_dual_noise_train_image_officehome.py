@@ -159,7 +159,8 @@ def train(config):
     len_train_source = len(dset_loaders["source"])
     len_train_target = len(dset_loaders["target"])
     best_acc = 0.0
-
+    
+    ''' Warm up Stage '''
     # warmup   # art 650  clipart 1000  product 800 # rw 700  
     for i in range(config['warm_up_epoch']):
         if i % config["test_interval"] == config["test_interval"] - 1 or i==0:
@@ -195,6 +196,7 @@ def train(config):
             torch.save(base_network, osp.join(config["output_path"], str(i)+".pth.tar"))
         torch.save(base_network, osp.join(config["output_path"], "warm_up_model.pth.tar"))
 
+    ''' Training Stage '''
     base_network = torch.load(osp.join(config["output_path"], "warm_up_model.pth.tar"), map_location=lambda storage, loc: storage)
     base_network = base_network.cuda()
     parameter_list = base_network.get_parameters()
@@ -251,22 +253,11 @@ def train(config):
         outputs_target_temp = outputs_target / config['temperature']
         target_softmax_out_temp = nn.Softmax(dim=1)(outputs_target_temp)
         target_entropy_weight = -loss.Entropy(target_softmax_out_temp).detach()
-        # print(target_entropy_weight)
-        # print(target_entropy_weight)
-        # zero_one_weight = torch.ones(target_entropy_weight.shape[0]).float().cuda()
-        # for i in range(target_entropy_weight.shape[0]):
-        #     if target_entropy_weight[i] < -2:
-        #         zero_one_weight[i] = 1e-5 
-        # count = zero_one_weight.sum()
-
-        #print(target_softmax_out_temp)
-        #print(loss.Entropy(torch.tensor([[0.5,0.5,0.,0.,0.]])))
+        
         target_entropy_weight = torch.exp(torch.mul(torch.add(target_entropy_weight, 1),alpha))
-        #target_entropy_weight = 1 + torch.exp(-torch.abs(torch.add(target_entropy_weight,math.log(3))))
-        # target_entropy_weight = 1 + torch.mul(target_entropy_weight,0)
+        
         target_entropy_weight = train_bs * target_entropy_weight / torch.sum(target_entropy_weight)
-        # print(target_entropy_weight)
-        # print(target_entropy_weight)
+
         cov_matrix_t = target_softmax_out_temp.mul(target_entropy_weight.view(-1,1)).transpose(1,0).mm(target_softmax_out_temp)
         cov_matrix_t = cov_matrix_t / torch.sum(cov_matrix_t, dim=1)
         mcc_loss = (torch.sum(cov_matrix_t) - torch.trace(cov_matrix_t)) / class_num
@@ -275,52 +266,16 @@ def train(config):
         source_softmax_out_temp = nn.Softmax(dim=1)(outputs_source_temp)   # [n * c]
 
         ce_item = nn.CrossEntropyLoss(reduce=False)(outputs_source_temp, labels_source)
-        # print(ce_item)
         weight = torch.sub(1,(torch.exp(ce_item)-torch.exp(-ce_item))/(torch.exp(ce_item)+torch.exp(-ce_item)))
-        #print(weight)
-        # beta = 1
-        # gamma = 3
-        # p_item = torch.exp(torch.mul(gamma,torch.sub(ce_item,beta)))
-        # n_item = torch.exp(torch.mul(gamma,torch.sub(beta,ce_item)))
-        # weight = torch.sub(0.5,torch.mul((p_item - n_item)/(p_item + n_item),0.5))
-
-        # for i in range(weight.shape[0]):
-        #     if weight[i] < 1e-2:
-        #         weight[i] = 0
-        #     elif weight[i] > 0.95:
-        #         weight[i] = 1
-
+        
         source_entropy_weight = -loss.Entropy(source_softmax_out_temp).detach()
-        # source_entropy_weight = torch.exp(torch.add(source_entropy_weight, 1))
         source_entropy_weight = torch.exp(torch.mul(torch.add(source_entropy_weight, 1),alpha))
         source_entropy_weight = train_bs * source_entropy_weight / (torch.sum(source_entropy_weight)+1e-3)
         
         zero_one_weight = torch.mul(weight,source_entropy_weight)
-
-        # zero_one_weight = torch.mul(weight,source_entropy_weight)
-        
-        #print(zero_one_weight)
-        #print(zero_one_weight)
-        # count = 0
-        # zero_one_weight = torch.zeros(weight.shape[0]).float().cuda()
-        # for i in range(weight.shape[0]):
-        #     # if weight[i] < 0.45:
-        #     if weight[i] < 1:
-        #         count = count + 1
-        #         zero_one_weight[i] = source_entropy_weight[i]
-
-        #print(zero_one_weight)
-
-
-                #zero_one_weight[i] = 1e-5 
-        #count = zero_one_weight.sum()
-        #print(count)
-        # print(labels_source == labels_raw.cuda())
-        #Mae = MeanAbsoluteError(num_classes=31)
-        #classifier_loss = Mae(outputs_source, labels_source)
         classifier_loss_list = nn.CrossEntropyLoss(reduce=False)(outputs_source_temp, labels_source)
         classifier_loss = torch.sum(torch.mul(zero_one_weight,classifier_loss_list))/(zero_one_weight.sum()+1e-3)
-        # classifier_loss = torch.mean(classifier_loss_list)
+
         total_loss = classifier_loss + mcc_loss
         total_loss.backward()
         optimizer.step()
@@ -343,7 +298,7 @@ if __name__ == "__main__":
     parser.add_argument('--output_dir', type=str, default='office_home', help="output directory of our model (in ../snapshot directory)")
     parser.add_argument('--lr', type=float, default=0.001, help="learning rate")
     parser.add_argument('--random', type=bool, default=False, help="whether use random projection")
-    parser.add_argument('--temperature', type=float, default=0.22, help="temperature value in MCC")
+    parser.add_argument('--temperature', type=float, default=0.4, help="temperature value in MCC")
     args = parser.parse_args()
     os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu_id
     # os.environ["CUDA_VISIBLE_DEVICES"] = '0,1,2,3'
